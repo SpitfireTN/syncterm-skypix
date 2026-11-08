@@ -7616,7 +7616,7 @@ static void draw_line_to(int target_x, int target_y, int *ppos);
 static void reinit_screen(uint8_t *font, int fontx, int fonty);
 static bool no_viewport(void);
 
-static const char *ripver[] = {"", "RIPSCRIP015410", "RIPSCRIP030001"};
+static const char *ripver[] = {"", "RIPSCRIP015410", "RIPSCRIP030001", ""};
 
 #define RIP_MOUSE_EVENT_NONE 0
 #define RIP_MOUSE_EVENT_TEXT 1
@@ -17542,6 +17542,125 @@ amiga_cputs(char *str)
 
 static bool skypix = false;
 
+// SkyPix: resolve an Amiga font file (e.g. "courier.font" or "courier/11")
+// relative to <syncterm-config-dir>/fonts/ so loading does not depend on the
+// process working directory. Falls back to the bare name on failure.
+static const char *
+skypix_font_path(const char *name)
+{
+	static char path[MAX_PATH + 1];
+	char        ini[MAX_PATH + 1];
+	char       *p;
+
+	if (get_syncterm_filename(ini, sizeof(ini), SYNCTERM_PATH_INI, false) == NULL)
+		return name;
+	p = strrchr(ini, '/');
+	if (p == NULL)
+		return name;
+	p[1] = '\0';
+	snprintf(path, sizeof(path), "%sfonts/%s", ini, name);
+	return path;
+}
+
+// SkyPix AREA FILL (command 3): seed flood fill of the connected region
+// that matches the seed pixel's colour, replacing it with fillcolor.  The
+// board draws a shape/letter outline, then floods its interior from a seed
+// point.  Reads the seed colour from the rendered buffer so it does not
+// depend on which palette produced the outline.
+static void
+skypix_area_fill(int skyx, int skyy, uint32_t fillcolor)
+{
+	struct ciolib_pixels *pix;
+	int      arg2, w, h, x0, y0;
+	uint32_t target;
+	size_t   cap = 16384, sp = 0;
+	int    (*stk)[2];
+
+	arg2 = rip.viewport.ey;
+	assert_rwlock_rdlock(&vstatlock);
+	if (rip.viewport.ey >= vstat.scrnheight)
+		arg2 = vstat.scrnheight - 1;
+	assert_rwlock_unlock(&vstatlock);
+	pix = getpixels(rip.viewport.sx, rip.viewport.sy, rip.viewport.ex, arg2, false);
+	if (pix == NULL)
+		return;
+	FREE_AND_NULL(pix->pixelsb);
+	w = pix->width;
+	h = pix->height;
+	x0 = map_rip_x(skyx) - rip.viewport.sx;
+	y0 = map_rip_y(skyy) - rip.viewport.sy;
+	if (x0 < 0 || y0 < 0 || x0 >= w || y0 >= h) {
+		freepixels(pix);
+		return;
+	}
+	target = pix->pixels[y0 * w + x0] & 0x80ffffff;
+	if ((fillcolor & 0x80ffffff) == target) {
+		freepixels(pix);
+		return;
+	}
+	// Leak guard: a real letter/shape interior is a small fraction of the
+	// viewport.  If the fill runs away (an outline with a gap at screen
+	// scale lets it ooze into the background), discard the result rather
+	// than flooding the whole screen.
+	size_t   filled = 0;
+	size_t   leak_limit = ((size_t)w * (size_t)h) / 4;
+	bool     leaked = false;
+
+	stk = malloc(cap * sizeof(*stk));
+	if (stk != NULL) {
+		stk[sp][0] = x0;
+		stk[sp][1] = y0;
+		sp++;
+		while (sp > 0) {
+			int off, x, y;
+
+			sp--;
+			x = stk[sp][0];
+			y = stk[sp][1];
+			off = y * w + x;
+			if ((pix->pixels[off] & 0x80ffffff) != target)
+				continue;
+			pix->pixels[off] = fillcolor;
+			if (++filled > leak_limit) {
+				leaked = true;
+				break;
+			}
+			if (sp + 4 > cap) {
+				size_t ncap = cap * 2;
+				int (*ns)[2] = realloc(stk, ncap * sizeof(*stk));
+				if (ns == NULL)
+					break;
+				stk = ns;
+				cap = ncap;
+			}
+			if (x > 0) {
+				stk[sp][0] = x - 1;
+				stk[sp][1] = y;
+				sp++;
+			}
+			if (x < w - 1) {
+				stk[sp][0] = x + 1;
+				stk[sp][1] = y;
+				sp++;
+			}
+			if (y > 0) {
+				stk[sp][0] = x;
+				stk[sp][1] = y - 1;
+				sp++;
+			}
+			if (y < h - 1) {
+				stk[sp][0] = x;
+				stk[sp][1] = y + 1;
+				sp++;
+			}
+		}
+		free(stk);
+	}
+	if (!leaked)
+		setpixels(rip.viewport.sx, rip.viewport.sy, rip.viewport.ex, arg2, 0, 0, 0, 0, pix, NULL);
+	freepixels(pix);
+}
+
 static void
 do_skypix(char *buf, size_t len)
 {
@@ -17604,8 +17723,10 @@ do_skypix(char *buf, size_t len)
 			rip.x = argv[1];
 			rip.y = argv[2];
 			break;
-		case 3: // Flood fill...
-			printf("TODO: SkyPix Flood Fill mode %ld\n", argv[0]);
+		case 3: // Area fill (flood fill): ESC[3;m;x;y!
+			if (argc < 4)
+				break;
+			skypix_area_fill(argv[2], argv[3], map_rip_color(cterm->attr & 0x0f));
 			break;
 		case 4: // Rectangle Fill...
 			if (argc < 5)
@@ -17672,21 +17793,22 @@ do_skypix(char *buf, size_t len)
 			}
 #endif
 			if ((sarg == NULL) || (argv[1] == 0)) {
-                                // Set cterm position from amiga_x/y
+                                // Font reset: restore the text cursor to the
+                                // pen position and return to normal cterm text
+                                // rendering, so ANSI cursor control, backspace,
+                                // and line editing work after a SkyPix screen.
 				gettextinfo(&ti);
 				vmode = find_vmode(ti.currmode);
-				if (vmode == -1)
-					break;
 				if (amiga_font != NULL) {
-					cterm_gotoxy(cterm, (amiga_x / vparams[vmode].charwidth) + 1,
-					    ((amiga_y
-					    + ((amiga_font->height - amiga_font->baseline - 1)
-					        << doubled)) / vparams[vmode].charheight) + 1);
+					if (vmode != -1)
+						cterm_gotoxy(cterm, (amiga_x / vparams[vmode].charwidth) + 1,
+						    ((amiga_y
+						    + ((amiga_font->height - amiga_font->baseline - 1)
+						        << doubled)) / vparams[vmode].charheight) + 1);
 					free(amiga_font);
 					amiga_font = NULL;
 				}
-
-                                // cterm->font_render = NULL;
+				cterm->font_render = NULL;
 				break;
 			}
 			free(amiga_font);
@@ -17700,7 +17822,7 @@ do_skypix(char *buf, size_t len)
 			if (strchr(sarg, '\\'))
 				break;
 			strlwr(sarg);
-			off_t flen = flength(sarg);
+			off_t flen = flength(skypix_font_path(sarg));
 			size_t nchars;
 			if (flen < 0) {
 				printf("TODO: Unable to allocate %" PRIdOFF " bytes for font %s.\n", flen, sarg);
@@ -17711,7 +17833,7 @@ do_skypix(char *buf, size_t len)
 				printf("TODO: Unable to allocate %" PRIdOFF " bytes for font %s.\n", flen, sarg);
 				break;
 			}
-			font = fopen(sarg, "rb");
+			font = fopen(skypix_font_path(sarg), "rb");
 			if (font == NULL) {
 				printf("TODO: Unable to open font %s\n", sarg);
 				free(fnt);
@@ -17746,13 +17868,13 @@ do_skypix(char *buf, size_t len)
 				break;
 			}
 			strlwr(fnt->entry[i].std.name);
-			flen = flength(fnt->entry[i].std.name);
+			flen = flength(skypix_font_path(fnt->entry[i].std.name));
 			if (flen < 0) {
 				printf("TODO: Unable to read font %s size\n", fnt->entry[i].std.name);
 				free(fnt);
 				break;
 			}
-			font = fopen(fnt->entry[i].std.name, "rb");
+			font = fopen(skypix_font_path(fnt->entry[i].std.name), "rb");
 			if (font == NULL) {
 				printf("TODO: Unable to open font %s\n", fnt->entry[i].std.name);
 				free(fnt);
@@ -17853,13 +17975,17 @@ do_skypix(char *buf, size_t len)
 			setpalette(fg, 0xcccc, 0, 0x8888);
 			break;
 		case 13: // Filled ellipse
+			// SkyPix filled ellipse draws in Pen A (the foreground set
+			// by ESC[15), not the background: fill and border both use
+			// the current foreground, matching the outline ellipse
+			// (case 5).  Filling with the background made it invisible.
 			memcpy(fp, rip.fill_pattern, sizeof(rip.fill_pattern));
 			memset(rip.fill_pattern, 0xff, sizeof(rip.fill_pattern));
-			oc = cterm->attr & 0x0f;
+			oc = rip.fill_color;
 			olw = rip.line_width;
-			rip.fill_color = (cterm->attr >> 4) & 0x0f;
+			rip.fill_color = cterm->attr & 0x0f;
 			rip.line_width = 1;
-			full_ellipse(argv[1], argv[2], 0, 360, argv[3], argv[4], true, map_rip_color(rip.color));
+			full_ellipse(argv[1], argv[2], 0, 360, argv[3], argv[4], true, cterm->fg_color);
 			rip.fill_color = oc;
 			rip.line_width = olw;
 			break;
@@ -18382,6 +18508,26 @@ rip_play_scene(const char *filename)
 #endif
 }
 
+// SkyPix command 10 (Set Font) carries a trailing font-name string after
+// its numeric parameters: ESC[10;<size>!<name>!  (the name is absent when
+// <size> is 0, a font reset).  The ESC sub-machine uses this to keep
+// accumulating the name through to its closing '!' instead of terminating
+// on the first '!' and spilling the name to the text window.
+static bool
+skypix_awaiting_fontname(const uint8_t *esc, size_t len)
+{
+	long  cmd, arg1;
+	char *p;
+
+	if (len < 3)
+		return false;
+	cmd = strtol((const char *)&esc[2], &p, 10);
+	if (cmd != 10)
+		return false;
+	arg1 = (*p == ';') ? strtol(p + 1, NULL, 10) : 0;
+	return arg1 != 0;
+}
+
 // ESC sub-machine.  Handles the four RIP-spec ANSI sequences
 // (\x1b[!, \x1b[0!, \x1b[1!, \x1b[2!) plus SkyPix strings
 // (\x1b[<N>;...!).  Anything else is flushed back into
@@ -18437,17 +18583,23 @@ cb_esc_feed(uint8_t c, uint8_t *origbuf, size_t *out)
 
 	// pos >= 2: parameter chars or final '!'.
 	if (c == '!') {
+		bool first_excl = (memchr(cb.esc, '!', cb.esc_len) == NULL);
 		cb.esc[pos] = '!';
 		cb.esc_len++;
+		// First '!' of a Set-Font command: the font name follows,
+		// closed by a second '!'.  Keep accumulating rather than
+		// dispatching the truncated numeric-only command here.
+		if (first_excl && skypix_awaiting_fontname(cb.esc, cb.esc_len))
+			return 1;
 		size_t plen = cb.esc_len;
 
 		if (plen == 3) {
 			// "\x1b[!": version query
-			if (rip.version)
+			if (rip.version && rip.version != RIP_VERSION_SKYPIX)
 				conn_send(ripver[rip.version], 14, 1000);
 		}
 		else if (plen == 4 && cb.esc[2] == '0') {
-			if (rip.version)
+			if (rip.version && rip.version != RIP_VERSION_SKYPIX)
 				conn_send(ripver[rip.version], 14, 1000);
 		}
 		else if (plen == 4 && cb.esc[2] == '1') {
@@ -18475,6 +18627,16 @@ cb_esc_feed(uint8_t c, uint8_t *origbuf, size_t *out)
 
 	// Parameter char: continue accumulating.
 	if ((c >= '0' && c <= '9') || c == ';') {
+		cb.esc[pos] = c;
+		cb.esc_len++;
+		return 1;
+	}
+
+	// Inside a Set-Font name string (first '!' already seen): keep
+	// accumulating the name (letters, '.', etc.) through to its
+	// closing '!' instead of spilling it to the text window.
+	if (memchr(cb.esc, '!', cb.esc_len) != NULL
+	    && skypix_awaiting_fontname(cb.esc, cb.esc_len)) {
 		cb.esc[pos] = c;
 		cb.esc_len++;
 		return 1;
@@ -18787,7 +18949,10 @@ parse_rip_new(BYTE *origbuf, size_t blen, size_t maxlen)
 		// passthrough output through cterm_write, leaving cterm's
 		// cursor in sync with the byte stream so the cursor fallback
 		// in cb_accept_introducer reads an accurate value.
-		if (cb.len == 0 && c == '!') {
+		// Not mid-ESC-sequence: a SkyPix command terminator (ESC[..!)
+		// arrives with cb.len == 0 too, but must reach cb_esc_feed in
+		// this pass so the command and its following text stay in step.
+		if (cb.len == 0 && cb.esc_len == 0 && c == '!') {
 			cb_defer_push(&origbuf[i], blen - i);
 			return out;
 		}
@@ -18850,6 +19015,18 @@ parse_rip_new(BYTE *origbuf, size_t blen, size_t maxlen)
 					origbuf[out++] = 0x1b;
 					origbuf[out++] = '[';
 					origbuf[out++] = 'B';
+				}
+				else if (cterm != NULL && cterm->skypix && amiga_font != NULL
+				    && (c >= 0x20 || c == '\r' || c == '\n')) {
+					// SkyPix text must render in stream order,
+					// synchronized with the inline ESC[19;x;y! pen
+					// moves.  Buffering it for cterm's batched
+					// font_render draws a whole network chunk at the
+					// last pen position instead of per-run; draw now.
+					// Only printable text and CR/LF: other controls
+					// (backspace, etc.) fall through to cterm so line
+					// editing and cursor control keep working.
+					draw_glyph(c);
 				}
 				else {
 					origbuf[out++] = c;
