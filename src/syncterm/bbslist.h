@@ -1,0 +1,265 @@
+/* Copyright (C), 2007 by Stephen Hurd */
+
+#ifndef _BBSLIST_H_
+#define _BBSLIST_H_
+
+#include <stdbool.h>
+#include <stdio.h>   /* FILE * */
+#include <time.h>
+
+#include "dirwrap.h" /* MAX_PATH */
+#include "gen_defs.h"
+#include "ini_file.h"
+
+#if defined(_WIN32)
+ #include <malloc.h> /* alloca() on Win32 */
+#endif
+
+#include <cterm.h>
+
+#define LIST_NAME_MAX 30
+#define LIST_ADDR_MAX 64
+#define BBSLIST_MAX_ENTRIES 100000
+#define MAX_USER_LEN 30
+#define MAX_PASSWD_LEN 128
+#define MAX_SYSPASS_LEN 128
+#define MAX_TLS_PSK_ID_LEN 128
+#define MAX_TLS_PSK_LEN 256
+
+enum {
+	USER_BBSLIST
+	,
+	SYSTEM_BBSLIST
+};
+
+enum {
+	BBSLIST_SELECT
+	,
+	BBSLIST_EDIT
+};
+
+enum bbslist_read_status {
+	BBSLIST_READ_OK,
+	BBSLIST_READ_PASSWORD_REQUIRED,
+	BBSLIST_READ_DECRYPT_FAILED,
+	BBSLIST_READ_FAILED,
+	BBSLIST_READ_MIGRATION_LIST_OPEN_FAILED,
+	BBSLIST_READ_MIGRATION_INI_OPEN_FAILED,
+	BBSLIST_READ_MIGRATION_INI_READ_FAILED,
+	BBSLIST_READ_MIGRATION_LIST_WRITE_FAILED,
+	BBSLIST_READ_MIGRATION_INI_WRITE_FAILED,
+};
+
+enum {
+	SCREEN_MODE_CURRENT
+	,
+	SCREEN_MODE_80X25
+	,
+	SCREEN_MODE_LCD80X25
+	,
+	SCREEN_MODE_80X28
+	,
+	SCREEN_MODE_80X30
+	,
+	SCREEN_MODE_80X43
+	,
+	SCREEN_MODE_80X50
+	,
+	SCREEN_MODE_80X60
+	,
+	SCREEN_MODE_132X37
+	,
+	SCREEN_MODE_132x52
+	,
+	SCREEN_MODE_132X25
+	,
+	SCREEN_MODE_132X28
+	,
+	SCREEN_MODE_132X30
+	,
+	SCREEN_MODE_132X34
+	,
+	SCREEN_MODE_132X43
+	,
+	SCREEN_MODE_132X50
+	,
+	SCREEN_MODE_132X60
+	,
+	SCREEN_MODE_C64
+	,
+	SCREEN_MODE_C128_40
+	,
+	SCREEN_MODE_C128_80
+	,
+	SCREEN_MODE_ATARI
+	,
+	SCREEN_MODE_ATARI_XEP80
+	,
+	SCREEN_MODE_CUSTOM
+	,
+	SCREEN_MODE_EGA_80X25
+	,
+	SCREEN_MODE_VGA_80X25
+	,
+	SCREEN_MODE_PRESTEL,
+	SCREEN_MODE_BEEB,
+	SCREEN_MODE_ATARIST_40X25,
+	SCREEN_MODE_ATARIST_80X25,
+	SCREEN_MODE_ATARIST_80X25_MONO,
+	SCREEN_MODE_TERMINATOR
+};
+
+
+enum {
+	ADDRESS_FAMILY_UNSPEC
+	,
+	ADDRESS_FAMILY_INET
+	,
+	ADDRESS_FAMILY_INET6
+};
+
+enum {
+	RIP_VERSION_NONE
+	,
+	RIP_VERSION_1
+	,
+	RIP_VERSION_3
+};
+
+enum {
+	SYNCTERM_PARITY_NONE,
+	SYNCTERM_PARITY_EVEN,
+	SYNCTERM_PARITY_ODD,
+};
+
+enum syncterm_tls_version {
+	SYNCTERM_TLS_VERSION_UNKNOWN,
+	SYNCTERM_TLS_VERSION_1_2,
+	SYNCTERM_TLS_VERSION_1_3,
+};
+
+/* NOTE: changing this may require updating sort_order in bbslist.c */
+struct bbslist {
+	char               name[LIST_NAME_MAX + 1];
+	char               addr[LIST_ADDR_MAX + 1];
+	short unsigned int port;
+	time_t             added;
+	time_t             connected;
+	unsigned int       calls;
+	char               user[MAX_USER_LEN + 1];
+	char               password[MAX_PASSWD_LEN + 1];
+	char               syspass[MAX_SYSPASS_LEN + 1];
+	int                type;
+	int                conn_type;
+	int                id;
+	int                screen_mode;
+	int                nostatus;
+	char               dldir[MAX_PATH + 1];
+	char               uldir[MAX_PATH + 1];
+	char               logfile[MAX_PATH + 1];
+	bool               append_logfile;
+	int                xfer_loglevel;
+	int                protocol_loglevel;
+	int                bpsrate;
+	int                music;
+	int                address_family;
+	char               font[80];
+	int                hidepopups;
+	char               ghost_program[9]; /* GHost program can only be 8 chars max. */
+	int                rip;
+	int                flow_control;
+	char               comment[1024];
+	char               wren_scripts[INI_MAX_VALUE_LEN];
+	bool               force_lcf;
+	bool               yellow_is_yellow;
+	/* SSH host-key fingerprint.  ssh_fingerprint_len is 0 (no stored
+	   approval), 20 (legacy SHA-1 from the Cryptlib era), or 32
+	   (SHA-256).  A successful connect against a SHA-1 entry rewrites
+	   the stored value as SHA-256; new entries are always SHA-256. */
+	uint8_t            ssh_fingerprint_len;
+	uint8_t            ssh_fingerprint[32];
+	bool               sftp_public_key;
+	bool               ssh_allow_aes128_cbc;
+	bool               ssh_accept_early_data;
+	bool               telnet_no_binary;
+	bool               defer_telnet_negotiation;
+	bool               tls_trust_web_pki;
+	char               tls_trusted_cert[MAX_PATH + 1];
+	char               tls_client_cert[MAX_PATH + 1];
+	char               tls_client_key[MAX_PATH + 1];
+	char               tls_psk_identity[MAX_TLS_PSK_ID_LEN + 1];
+	char               tls_psk[MAX_TLS_PSK_LEN + 1];
+	int                tls_psk_version;
+	int                tls_version_floor;
+	// No way to get a uint8_t from an ini file.
+	short unsigned int stop_bits;
+	short unsigned int data_bits;
+	// Enums are ints (actually, they're unsigned, but ints are what they are
+	int                parity;
+	uint32_t           palette[16];
+	unsigned           palette_size;
+	char               term_name[32];
+	bool               lf_expand;
+	int32_t            sort_order;
+};
+
+extern char *music_names[];
+extern char  music_helpbuf[];
+
+extern char       *log_levels[];
+extern char       *rate_names[];
+extern int         rates[];
+extern int         sortorder[];
+extern ini_style_t ini_style;
+extern char       *screen_modes_enum[];
+extern char       *screen_modes[];
+extern char       *scaling_names[];
+extern char list_password[1024];
+extern enum iniCryptAlgo list_algo;
+extern int list_keysize;
+
+void init_sort_profiles(FILE *inifile);
+size_t bbslist_sort_field_count(void);
+const char *bbslist_sort_field_name(int field);
+bool bbslist_sort_field_reversed(int field);
+size_t bbslist_sort_profile_count(void);
+const char *bbslist_sort_profile_name(size_t index);
+size_t bbslist_sort_profile_order(size_t index, int *order,
+    size_t capacity);
+int bbslist_active_sort_profile(void);
+bool bbslist_set_active_sort_profile(size_t index);
+bool bbslist_add_sort_profile(size_t index, const char *name,
+    const int *order, size_t count);
+bool bbslist_update_sort_profile(size_t index, const char *name,
+    const int *order, size_t count);
+bool bbslist_delete_sort_profile(size_t index);
+bool bbslist_save_sort_profiles(void);
+void read_item(ini_fp_list_t *listfile, struct bbslist *entry, ini_lv_string_t *bbsname, int id, int type);
+void read_list(char *listpath, struct bbslist **list, struct bbslist *defaults, int *i, int type);
+bool read_list_password(const char *listpath, struct bbslist **list,
+    struct bbslist *defaults, int *count, int type, const char *password,
+    enum bbslist_read_status *status);
+void free_list(struct bbslist **list, int listcount);
+void sort_bbs_list(struct bbslist **list, int *listcount);
+bool add_bbs(const char *listpath, struct bbslist *bbs, bool isnew);
+bool save_bbs_defaults(const char *listpath, struct bbslist *defaults);
+bool rename_bbs(const char *listpath, const char *old_name,
+    struct bbslist *bbs);
+bool delete_bbs(const char *listpath, struct bbslist *bbs);
+bool bbslist_wren_script_name_valid(const char *name);
+str_list_t bbslist_get_wren_scripts(const struct bbslist *bbs);
+bool bbslist_set_wren_scripts(struct bbslist *bbs, const str_list_t scripts);
+bool rewrite_bbslist_kdf(const char *listpath, const char *kdf_spec);
+bool rewrite_bbslist_encryption(const char *listpath,
+    enum iniCryptAlgo algo, int keysize, const char *new_password);
+bool save_webgets(void);
+void bbslist_sweep_orphan_caches(struct bbslist **list, size_t listcount);
+int get_rate_num(int rate);
+cterm_emulation_t get_emulation(struct bbslist *bbs);
+const char *get_emulation_str(struct bbslist *bbs);
+str_list_t iniReadBBSList(FILE *fp, bool userList);
+str_list_t iniReadBBSListPassword(FILE *fp, bool userList,
+    const char *password, enum bbslist_read_status *status);
+const char *bbslist_read_status_string(enum bbslist_read_status status);
+
+#endif // ifndef _BBSLIST_H_
