@@ -2,9 +2,42 @@
 
 Fixes and additions for **SkyPix** emulation in [SyncTERM](https://gitlab.synchro.net/main/sbbs/-/tree/master/src/syncterm) (part of Synchronet / `sbbs`), developed against a live SkyPix board — **Reign of Fire BBS** (`call.rofbbs.com:6800`, C‑Net/Amiga 5.37b; choose **[S] SkyPix** at the prefs prompt). Website: <https://www.rofbbs.com>.
 
-Before these changes, SyncTERM could barely display a SkyPix board; with them it renders the board essentially the same as RGTerm and IcyTERM. Posting here because the Synchronet GitLab requires a `*.synchro.net` account to file — maintainers are welcome to pull/apply from here.
+Before these changes, SyncTERM could barely display a SkyPix board; with them it renders the board essentially the same as RGTerm and IcyTERM.
 
-## What's fixed
+---
+
+## Status — these fixes are upstream. Work continues in SyncTERM itself.
+
+**This is not a fork and it is not where SkyPix development happens.** It was
+only ever somewhere to point a maintainer at, because the Synchronet GitLab
+needs a `*.synchro.net` account to file from. Deuce (Stephen Hurd) found it,
+and the six fixes below are in the SyncTERM **v2** tree; v2 has since gone
+considerably further than anything here — notably proper 640x200 → 640x400
+handling.
+
+**Where to go instead:**
+
+| For | Go to |
+|---|---|
+| SyncTERM v2 source | <https://github.com/RealDeuce/SyncTERM> (read-only mirror of v2+) |
+| Filing a SkyPix bug | <https://sf.net/p/syncterm> — the official tracker, and it **allows anonymous filing**. Not the GitLab. |
+| The v1 SkyPix report | SourceForge **#299**, which the maintainer pinned as a conformance test |
+| The live v2.0α thread | [RealDeuce/SyncTERM issue #1](https://github.com/RealDeuce/SyncTERM/issues/1) |
+
+**What this repo is still good for**, because it is not duplicated upstream:
+the **Amiga font set** (SyncTERM ships none), the write-up in
+[`docs/report.md`](docs/report.md), and the **comparison screenshots against
+RGTerm and IcyTERM** — the maintainer can't produce those himself, as RGTerm
+doesn't run on his OS.
+
+> **`docs/v2-screenshots/` is linked directly from an open upstream issue.**
+> Those four PNGs are served to that thread by raw URL. Do not move, rename
+> or remove them, and do not delete this repository while that issue is open
+> — the images would 404 inside a live conversation, and retroactively.
+
+---
+
+## What was fixed here (now upstream in v2)
 
 | # | Issue | Fix |
 |---|---|---|
@@ -39,4 +72,6 @@ SkyPix boards name Amiga fonts (Courier, Times, Diamond, Emerald, Pearl, Ruby, �
 `reign-of-fire-phonebook.lst` (SyncTERM dialing‑directory format, credentials stripped) — five Reign of Fire boards covering ANSI, PETSCII/C64, and SkyPix. Handy for regression testing.
 
 ---
-*Contributed by [SpitfireTN](https://www.rofbbs.com) / Reign of Fire BBS. Happy to revise anything for upstream style.*
+*Contributed by [SpitfireTN](https://www.rofbbs.com) / Reign of Fire BBS.
+Kept as a reference and evidence store; SkyPix work itself continues in
+SyncTERM v2 and on the SourceForge tracker — see **Status** above.*
